@@ -2,13 +2,31 @@ from fastapi import FastAPI, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 import httpx
 import asyncio
-import random
 from typing import List, Optional
 from city_temp_app import models, schemas, database
 
 models.Base.metadata.create_all(bind=database.engine)
 
 app = FastAPI(title="City Temperature API")
+
+
+async def fetch_weather(city_name: str):
+    async with httpx.AsyncClient() as client:
+        geo_url = f"https://geocoding-api.open-meteo.com/v1/search?name={city_name}&count=1&language=en&format=json"
+        geo_resp = await client.get(geo_url)
+        geo_data = geo_resp.json()
+
+        if not geo_data.get("results"):
+            return 0.0
+
+        lat = geo_data["results"][0]["latitude"]
+        lon = geo_data["results"][0]["longitude"]
+
+        weather_url = f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&current_weather=true"
+        weather_resp = await client.get(weather_url)
+        weather_data = weather_resp.json()
+
+        return weather_data["current_weather"]["temperature"]
 
 
 @app.post("/cities", response_model=schemas.City, status_code=201)
@@ -43,16 +61,11 @@ def delete_city(city_id: int, db: Session = Depends(database.get_db)):
     return {"message": f"City {city_id} deleted successfully"}
 
 
-async def fetch_weather(city_name: str):
-    await asyncio.sleep(0.1)
-    return round(random.uniform(15.0, 35.0), 2)
-
-
 @app.post("/temperatures/update")
 async def update_temperatures(db: Session = Depends(database.get_db)):
     cities = db.query(models.City).all()
     if not cities:
-        raise HTTPException(status_code=400, detail="No cities in database to update")
+        raise HTTPException(status_code=400, detail="No cities in database")
 
     tasks = [fetch_weather(city.name) for city in cities]
     results = await asyncio.gather(*tasks)
